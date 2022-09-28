@@ -1,1 +1,1 @@
-# -vault-plugin-database-clickhouse
+# vault-plugin-database-clickhouse
