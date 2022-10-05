@@ -50,8 +50,8 @@ type Clickhouse struct {
 	usernameProducer template.StringTemplate
 }
 
-func (p *Clickhouse) Initialize(ctx context.Context, req dbplugin.InitializeRequest) (dbplugin.InitializeResponse, error) {
-	newConf, err := p.SQLConnectionProducer.Init(ctx, req.Config, req.VerifyConnection)
+func (c *Clickhouse) Initialize(ctx context.Context, req dbplugin.InitializeRequest) (dbplugin.InitializeResponse, error) {
+	newConf, err := c.SQLConnectionProducer.Init(ctx, req.Config, req.VerifyConnection)
 	if err != nil {
 		return dbplugin.InitializeResponse{}, err
 	}
@@ -68,9 +68,9 @@ func (p *Clickhouse) Initialize(ctx context.Context, req dbplugin.InitializeRequ
 	if err != nil {
 		return dbplugin.InitializeResponse{}, fmt.Errorf("unable to initialize username template: %w", err)
 	}
-	p.usernameProducer = up
+	c.usernameProducer = up
 
-	_, err = p.usernameProducer.Generate(dbplugin.UsernameMetadata{})
+	_, err = c.usernameProducer.Generate(dbplugin.UsernameMetadata{})
 	if err != nil {
 		return dbplugin.InitializeResponse{}, fmt.Errorf("invalid username template: %w", err)
 	}
