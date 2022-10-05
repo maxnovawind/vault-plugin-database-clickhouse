@@ -212,6 +212,7 @@ func TestClickhouse_NewUser(t *testing.T) {
 		expectErr             bool
 		expectedUsernameRegex string
 		skipCreateError       bool
+		disableInit           bool
 	}
 
 	useCases := map[string]testCase{
@@ -235,8 +236,7 @@ func TestClickhouse_NewUser(t *testing.T) {
 				GRANT ALL ON default.* TO "{{username}}";`},
 			expectErr: false,
 		},
-
-		"Sucess Default Username Creation": {
+		"Success Default Username Creation": {
 			displayName: "token",
 			roleName:    "my-role",
 			creationStmts: []string{
@@ -244,7 +244,16 @@ func TestClickhouse_NewUser(t *testing.T) {
 				GRANT ALL ON default.* TO "{{username}}";`},
 			expectErr: false,
 		},
-		"Empty creation": {
+		"Failed Default Username Creation": {
+			displayName: "token",
+			roleName:    "my-role",
+			creationStmts: []string{
+				`CREATE USER "{{username}}" IDENTIFIED BY '{{password}}';
+				GRANT ALL ON default.* TO "{{username}}";`},
+			expectErr:   true,
+			disableInit: true,
+		},
+		"Failed Empty creation": {
 			displayName:           "token",
 			roleName:              "my-role",
 			creationStmts:         []string{},
@@ -261,7 +270,7 @@ func TestClickhouse_NewUser(t *testing.T) {
 			expectErr:        true,
 			skipCreateError:  true,
 		},
-		"Bad Statement": {
+		"Failed Bad Statement": {
 			displayName: "token",
 			roleName:    "my-role",
 			creationStmts: []string{
@@ -269,11 +278,11 @@ func TestClickhouse_NewUser(t *testing.T) {
 			expectErr: true,
 		},
 	}
+	connURL, cleanup := prepareClickhouseTestContainer(t)
+	t.Cleanup(cleanup)
 
 	for name, test := range useCases {
 		t.Run(name, func(t *testing.T) {
-			connURL, cleanup := prepareClickhouseTestContainer(t)
-			t.Cleanup(cleanup)
 
 			db := new()
 			defer dbtesting.AssertClose(t, db)
@@ -303,6 +312,10 @@ func TestClickhouse_NewUser(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), getRequestTimeout(t))
 			defer cancel()
+
+			if test.disableInit {
+				db.Initialized = false
+			}
 
 			createResp, err := db.NewUser(ctx, createReq)
 			if test.expectErr && err == nil {
@@ -347,41 +360,53 @@ func TestClickhouse_Type(t *testing.T) {
 func TestClickhouse_DeleteUser(t *testing.T) {
 	t.Parallel()
 	type testCase struct {
-		deleteStatements []string
-		disableInit      bool
-		expectErr        bool
+		deleteStatements  []string
+		overwriteUsername string
+		disableInit       bool
+		skipCreateUser    bool
+		expectErr         bool
 	}
 
 	useCases := map[string]testCase{
-		"name delete": {
+		"Sucess name delete": {
 			deleteStatements: []string{`
 				DROP USER "{{name}}";`,
 			},
 			expectErr: false,
 		},
-		"username delete": {
+		"Sucess username delete": {
 			deleteStatements: []string{`
 				DROP USER "{{username}}";`,
 			},
 			expectErr: false,
 		},
-		"failed delete": {
+		"Failed delete": {
 			deleteStatements: []string{`
 				DROP USER "{{username}}";`,
 			},
 			disableInit: true,
 			expectErr:   true,
 		},
-		"default delete": {
+		"Sucessdefault delete": {
 			expectErr: false,
 		},
-		"custom failed delete": {
+		"Sucess default delete with skip user creation": {
+			expectErr:         false,
+			skipCreateUser:    true,
+			overwriteUsername: "ddd",
+		},
+		"Failed default delete with skip user creation when select": {
+			expectErr:         true,
+			skipCreateUser:    true,
+			overwriteUsername: "\"'''^$*}",
+		},
+		"Failed custom failed delete": {
 			expectErr: true,
 			deleteStatements: []string{`
 				DRO USER "{{username}}";`,
 			},
 		},
-		"failed get connection when default delete": {
+		"Failed get connection when default delete": {
 			disableInit: true,
 			expectErr:   true,
 		},
@@ -421,15 +446,24 @@ func TestClickhouse_DeleteUser(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), getRequestTimeout(t))
 			defer cancel()
 
-			createResp, err := db.NewUser(ctx, createReq)
-			if err != nil {
-				t.Fatalf("err: %s", err)
+			var usernameResp string
+
+			if !test.skipCreateUser {
+				createResp, err := db.NewUser(ctx, createReq)
+				if err != nil {
+					t.Fatalf("err: %s", err)
+				}
+
+				assertCredentialsExist(t, connURL, createResp.Username, createReq.Password)
+				usernameResp = createResp.Username
 			}
 
-			assertCredentialsExist(t, connURL, createResp.Username, createReq.Password)
+			if test.overwriteUsername != "" {
+				usernameResp = test.overwriteUsername
+			}
 
 			deleteReq := dbplugin.DeleteUserRequest{
-				Username: createResp.Username,
+				Username: usernameResp,
 				Statements: dbplugin.Statements{
 					Commands: test.deleteStatements,
 				},
@@ -438,7 +472,12 @@ func TestClickhouse_DeleteUser(t *testing.T) {
 			if test.disableInit {
 				db.Initialized = false
 			}
-			_, err = db.DeleteUser(context.Background(), deleteReq)
+
+			ctx, cancel = context.WithTimeout(context.Background(), getRequestTimeout(t))
+			defer cancel()
+
+			_, err := db.DeleteUser(ctx, deleteReq)
+
 			if test.expectErr && err == nil {
 				t.Fatalf("err expected, got nil")
 			}
@@ -446,7 +485,7 @@ func TestClickhouse_DeleteUser(t *testing.T) {
 				t.Fatalf("no error expected, got: %s", err)
 			}
 			if err == nil {
-				assertCredentialsDoNotExist(t, connURL, createResp.Username, createReq.Password)
+				assertCredentialsDoNotExist(t, connURL, usernameResp, createReq.Password)
 			}
 		})
 	}
@@ -471,7 +510,7 @@ func TestClickhouse_UpdateUser(t *testing.T) {
 	}
 
 	tests := map[string]testCase{
-		"missing username": {
+		"Failed missing username": {
 			req: dbplugin.UpdateUserRequest{
 				Username: "",
 				Password: &dbplugin.ChangePassword{
@@ -481,14 +520,14 @@ func TestClickhouse_UpdateUser(t *testing.T) {
 			expectedPassword: initialPassword,
 			expectErr:        true,
 		},
-		"missing password": {
+		"Failed missing password": {
 			req: dbplugin.UpdateUserRequest{
 				Username: username,
 			},
 			expectedPassword: initialPassword,
 			expectErr:        true,
 		},
-		"empty password": {
+		"Failed empty password": {
 			req: dbplugin.UpdateUserRequest{
 				Username: username,
 				Password: &dbplugin.ChangePassword{
@@ -498,12 +537,12 @@ func TestClickhouse_UpdateUser(t *testing.T) {
 			expectedPassword: initialPassword,
 			expectErr:        true,
 		},
-		"missing username and password": {
+		"Failed missing username and password": {
 			req:              dbplugin.UpdateUserRequest{},
 			expectedPassword: initialPassword,
 			expectErr:        true,
 		},
-		"happy path": {
+		"Sucess changePassword": {
 			req: dbplugin.UpdateUserRequest{
 				Username: username,
 				Password: &dbplugin.ChangePassword{
@@ -513,7 +552,7 @@ func TestClickhouse_UpdateUser(t *testing.T) {
 			expectedPassword: "somenewpassword",
 			expectErr:        false,
 		},
-		"failed getConnection": {
+		"Failed getConnection": {
 			req: dbplugin.UpdateUserRequest{
 				Username: username,
 				Password: &dbplugin.ChangePassword{
@@ -524,7 +563,7 @@ func TestClickhouse_UpdateUser(t *testing.T) {
 			expectErr:        true,
 			disableInit:      true,
 		},
-		"bad statements": {
+		"Failed bad statements": {
 			req: dbplugin.UpdateUserRequest{
 				Username: username,
 				Password: &dbplugin.ChangePassword{
@@ -539,7 +578,7 @@ func TestClickhouse_UpdateUser(t *testing.T) {
 			expectedPassword: initialPassword,
 			expectErr:        true,
 		},
-		"custom changepassword statement": {
+		"Success custom changepassword statement": {
 			req: dbplugin.UpdateUserRequest{
 				Username: username,
 				Password: &dbplugin.ChangePassword{
