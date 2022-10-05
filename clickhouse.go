@@ -301,7 +301,6 @@ func (c *Clickhouse) defaultDeleteUser(ctx context.Context, username string) err
 	if !exists {
 		return nil
 	}
-	//log.Println(username)
 
 	isCluster, err := c.isClusterExist(ctx)
 	if err != nil {
