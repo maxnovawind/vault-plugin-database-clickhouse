@@ -44,7 +44,7 @@ make run
 
 ## Configuration
 
-Before using the vault plugin, you have to make sure that `access_managment` settings is enable for the admin user.
+Before using the vault plugin, you have to make sure that `access_management` settings is enable for the admin user.
 
 The plugin support the vault username_template.
 
@@ -91,7 +91,7 @@ vault write database/roles/my-clickhouse-role \
 
 Then consume the path credentials for retrieving the temporary access:
 ```
-vault read database/roles/my-clickhouse-role
+vault read database/creds/my-clickhouse-role
 
 Key                Value
 ---                -----
